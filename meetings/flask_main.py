@@ -189,27 +189,75 @@ def oauth2callback():
 def setrange():
     """
     User chose a date range with the bootstrap daterange
-    widget.
+    widget. adding seesion 'time'
     """
     app.logger.debug("Entering setrange")  
-    flask.flash("Setrange gave us '{}'".format(
-      request.form.get('daterange')))
     daterange = request.form.get('daterange')
+    #begint = request.form.get('begintime')
+    #endt = request.fom.get('endtime')
+
     flask.session['daterange'] = daterange
+    flask.session['timerange'] = {'begintime': request.form.get('begintime'), 
+                                  'endtime': request.form.get('endtime')}
     daterange_parts = daterange.split()
+
     flask.session['begin_date'] = interpret_date(daterange_parts[0])
+    flask.session['begin_time'] = interpret_time(request.form.get('begintime'))
     flask.session['end_date'] = interpret_date(daterange_parts[2])
+    flask.session['end_time'] = interpret_time(request.fom.get('endtime'))
+
+
     app.logger.debug("Setrange parsed {} - {}  dates as {} - {}".format(
       daterange_parts[0], daterange_parts[1], 
       flask.session['begin_date'], flask.session['end_date']))
+    app.logger.debug("\n parsed {} - {} time as {} - {}".format(
+      flask.session['timerange']['begintime'], flask.session['timerange']['endtime'],
+      flask.session['begin_time'], flask.session['end_time']))
     return flask.redirect(flask.url_for("choose"))
+
+
+
+
+@app.route('/_events', methods=['POST', 'GET'])
+def events():
+    """
+    retrieve the event data which was selected in the calendars 
+    using AJAX
+    """
+    service = get_gcal_service(valid_credentials())
+    selected_cals = request.json['ids']
+    ret =[]
+    begin_date = arrow.get(flask.session['begin_date'])
+    end_date = arrow.get(flask.session['end_date'])
+
+    if begin_date == end_date: 
+        diff = 1
+    else:
+      diff = ((end_date - begin_date).days) - 1
+
+    begin_query = time_el(begin_date, flask.session['begin_time'])
+    end_query = time_el(end_date, flask.session['end_time'])
+
+    for day in range(diff):
+        for cal_id in selected_cals:
+            events = service.events().list(calendarId=cal_id, 
+                                      timeMin=shift_days(begin_query, day), 
+                                      timeMax=shift_days(end_query, day), 
+                                      singleEvents=True, 
+                                      orderBy="startTime").execute() 
+
+            for event in events['items']:
+              ret.append({'summary': event['summary'],
+                          "startTime": arrow.get(event['start']['dateTime']).format("MM/DD/YYYY HH:mm"), 
+                          "endTime": arrow.get(event['end']['dateTime']).format("MM/DD/YYYY HH:mm")})
+
+    return flask.jsonify(ret)
 
 ####
 #
 #   Initialize session variables 
 #
 ####
-
 def init_session_values():
     """
     Start with some reasonable defaults for date and time ranges.
@@ -227,6 +275,7 @@ def init_session_values():
     # Default time span each day, 8 to 5
     flask.session["begin_time"] = interpret_time("9am")
     flask.session["end_time"] = interpret_time("5pm")
+    flask.session["timerange"] = {"begintime": '9:00 AM', 'endtime': '5:00 PM'}
 
 def interpret_time( text ):
     """
@@ -271,13 +320,21 @@ def interpret_date( text ):
         raise
     return as_arrow.isoformat()
 
-def next_day(isotext):
+def next_day(isotext, n):
     """
     ISO date + 1 day (used in query to Google calendar)
     """
     as_arrow = arrow.get(isotext)
-    return as_arrow.replace(days=+1).isoformat()
+    return as_arrow.replace(days=+n).isoformat()
 
+def time_el(date_text, time_text):
+  """
+  hour/minute elements 
+  """
+  date_arrow = arrow.get(date_text)
+  time_arrow = arrow.get(time_text)
+
+  return date_arrow.shift(hours=+time_arrow.hour, minutes=+time_arrow.minute).isoformat()
 ####
 #
 #  Functions (NOT pages) that return some information
